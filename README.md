@@ -20,15 +20,15 @@ And then execute:
     # Capfile
 
     require 'capistrano/puma'
-    require 'capistrano/puma/workers' #if you want to control the workers (in cluster mode)
-    require 'capistrano/puma/jungle'  #if you need the jungle tasks
-    require 'capistrano/puma/monit'   #if you need the monit tasks
-    require 'capistrano/puma/nginx'   #if you want to upload a nginx site template
+    require 'capistrano/puma/workers' # if you want to control the workers (in cluster mode)
+    require 'capistrano/puma/jungle'  # if you need the jungle tasks
+    require 'capistrano/puma/monit'   # if you need the monit tasks
+    require 'capistrano/puma/nginx'   # if you want to upload a nginx site template
 ```
 
-then you can use ```cap -vT``` to list tasks
+then you can use ```cap -T``` to list tasks
 ```
-cap puma:nginx_config # upload a nginx site config(eg. /etc/nginx/site-enabled/)
+cap puma:nginx_config # upload a nginx site config(eg. /etc/nginx/sites-enabled/)
 cap puma:config  # upload puma config(eg. shared/puma.config)
 ```
 you may want to customize these two templates locally before uploading
@@ -54,10 +54,12 @@ role :puma_nginx, %w{root@example.com}
 Configurable options, shown here with defaults: Please note the configuration options below are not required unless you are trying to override a default setting, for instance if you are deploying on a host on which you do not have sudo or root privileges and you need to restrict the path. These settings go in the deploy.rb file.
 
 ```ruby
+    set :puma_user, fetch(:user)
     set :puma_rackup, -> { File.join(current_path, 'config.ru') }
     set :puma_state, "#{shared_path}/tmp/pids/puma.state"
     set :puma_pid, "#{shared_path}/tmp/pids/puma.pid"
     set :puma_bind, "unix://#{shared_path}/tmp/sockets/puma.sock"    #accept array for multi-bind
+    set :puma_default_control_app, "unix://#{shared_path}/tmp/sockets/pumactl.sock"
     set :puma_conf, "#{shared_path}/puma.rb"
     set :puma_access_log, "#{shared_path}/log/puma_access.log"
     set :puma_error_log, "#{shared_path}/log/puma_error.log"
@@ -68,7 +70,7 @@ Configurable options, shown here with defaults: Please note the configuration op
     set :puma_worker_timeout, nil
     set :puma_init_active_record, false
     set :puma_preload_app, true
-    set :puma_prune_bundler, false
+    set :nginx_use_ssl, false
 ```
 For Jungle tasks (beta), these options exist:
 ```ruby
@@ -94,6 +96,9 @@ Ensure that the following directories are shared (via ``linked_dirs``):
     tmp/pids tmp/sockets log
 
 ## Changelog
+- 1.2.0: add support for puma user for puma user @mcb & @seuros
+- 1.1.0: Set :puma_preload_app to false; Reload Monit after uploading any monit configuration; Always refresh Gemfile @rafaelgoulart @suhailpatel @sime
+- 1.0.0: Add activate control app @askagirl
 - 0.8.5: Fix smart_restart task to check if puma preloads app
 - 0.8.4: Allow patch method (Nginx template) @lonre
 - 0.8.2: Start task creates a conf file if none exists @stevemadere
@@ -136,6 +141,8 @@ Ensure that the following directories are shared (via ``linked_dirs``):
 - [Jun Lin](https://github.com/linjunpop)
 - [fang duan](https://github.com/dfang)
 - [Steve Madere](https://github.com/stevemadere)
+- [Matias De Santi](https://github.com/mdesanti)
+- [Huang Bin](https://github.com/hbin)
 
 ## Contributing
 

@@ -1,4 +1,3 @@
-
 namespace :load do
   task :defaults do
     set :puma_default_hooks, -> { true }
@@ -12,16 +11,19 @@ namespace :load do
     set :puma_state, -> { File.join(shared_path, 'tmp', 'pids', 'puma.state') }
     set :puma_pid, -> { File.join(shared_path, 'tmp', 'pids', 'puma.pid') }
     set :puma_bind, -> { File.join("unix://#{shared_path}", 'tmp', 'sockets', 'puma.sock') }
+    set :puma_default_control_app, -> { File.join("unix://#{shared_path}", 'tmp', 'sockets', 'pumactl.sock') }
     set :puma_conf, -> { File.join(shared_path, 'puma.rb') }
     set :puma_access_log, -> { File.join(shared_path, 'log', 'puma_access.log') }
     set :puma_error_log, -> { File.join(shared_path, 'log', 'puma_error.log') }
     set :puma_init_active_record, false
-    set :puma_preload_app, true
-    set :puma_prune_bundler, false
+    set :puma_preload_app, false
 
     # Rbenv and RVM integration
     set :rbenv_map_bins, fetch(:rbenv_map_bins).to_a.concat(%w{ puma pumactl })
     set :rvm_map_bins, fetch(:rvm_map_bins).to_a.concat(%w{ puma pumactl })
+
+    # Bundler integration
+    set :bundle_bins, fetch(:bundle_bins).to_a.concat(%w{ puma pumactl })
 
     # Nginx and puma configuration
     set :nginx_config_name, -> { "#{fetch(:application)}_#{fetch(:stage)}" }
@@ -31,6 +33,7 @@ namespace :load do
     set :nginx_flags, -> { 'fail_timeout=0' }
     set :nginx_http_flags, -> { fetch(:nginx_flags) }
     set :nginx_socket_flags, -> { fetch(:nginx_flags) }
+    set :nginx_use_ssl, false
   end
 end
 
@@ -51,16 +54,17 @@ namespace :puma do
 
   desc 'Start puma'
   task :start do
-    on roles (fetch(:puma_role)) do
-      if test "[ -f #{fetch(:puma_conf)} ]"
-        info "using conf file #{fetch(:puma_conf)}"
-      else
-        invoke 'puma:config'
-      end
-      within current_path do
-        with rack_env: fetch(:puma_env) do
-
-          execute :bundle, 'exec', :puma, "-C #{fetch(:puma_conf)} --daemon"
+    on roles (fetch(:puma_role)) do |role|
+      puma_switch_user(role) do
+        if test "[ -f #{fetch(:puma_conf)} ]"
+          info "using conf file #{fetch(:puma_conf)}"
+        else
+          invoke 'puma:config'
+        end
+        within current_path do
+          with rack_env: fetch(:puma_env) do
+            execute :puma, "-C #{fetch(:puma_conf)} --daemon"
+          end
         end
       end
     end
@@ -69,19 +73,21 @@ namespace :puma do
   %w[halt stop status].map do |command|
     desc "#{command} puma"
     task command do
-      on roles (fetch(:puma_role)) do
+      on roles (fetch(:puma_role)) do |role|
         within current_path do
-          with rack_env: fetch(:puma_env) do
-            if test "[ -f #{fetch(:puma_pid)} ]"
-              if test "kill -0 $( cat #{fetch(:puma_pid)} )"
-                execute :bundle, 'exec', :pumactl, "-S #{fetch(:puma_state)} #{command}"
+          puma_switch_user(role) do
+            with rack_env: fetch(:puma_env) do
+              if test "[ -f #{fetch(:puma_pid)} ]"
+                if test "kill -0 $( cat #{fetch(:puma_pid)} )"
+                  execute :pumactl, "-S #{fetch(:puma_state)} -F #{fetch(:puma_conf)} #{command}"
+                else
+                  # delete invalid pid file , process is not running.
+                  execute :rm, fetch(:puma_pid)
+                end
               else
-                # delete invalid pid file , process is not running.
-                execute :rm, fetch(:puma_pid)
+                #pid file not found, so puma is probably not running or it using another pidfile
+                warn 'Puma not running'
               end
-            else
-              #pid file not found, so puma is probably not running or it using another pidfile
-              warn 'Puma not running'
             end
           end
         end
@@ -92,15 +98,17 @@ namespace :puma do
   %w[phased-restart restart].map do |command|
     desc "#{command} puma"
     task command do
-      on roles (fetch(:puma_role)) do
+      on roles (fetch(:puma_role)) do |role|
         within current_path do
-          with rack_env: fetch(:puma_env) do
-            if test "[ -f #{fetch(:puma_pid)} ]" and test "kill -0 $( cat #{fetch(:puma_pid)} )"
-              # NOTE pid exist but state file is nonsense, so ignore that case
-              execute :bundle, 'exec', :pumactl, "-S #{fetch(:puma_state)} #{command}"
-            else
-              # Puma is not running or state file is not present : Run it
-              invoke 'puma:start'
+          puma_switch_user(role) do
+            with rack_env: fetch(:puma_env) do
+              if test "[ -f #{fetch(:puma_pid)} ]" and test "kill -0 $( cat #{fetch(:puma_pid)} )"
+                # NOTE pid exist but state file is nonsense, so ignore that case
+                execute :pumactl, "-S #{fetch(:puma_state)} -F #{fetch(:puma_conf)} #{command}"
+              else
+                # Puma is not running or state file is not present : Run it
+                invoke 'puma:start'
+              end
             end
           end
         end
@@ -129,7 +137,23 @@ namespace :puma do
     end
   end
 
+  def puma_switch_user(role, &block)
+    user = puma_user(role)
+    if user == role.user
+      block.call
+    else
+      as user do
+        block.call
+      end
+    end
+  end
 
+  def puma_user(role)
+    properties = role.properties
+    properties.fetch(:puma_user) ||               # local property for puma only
+    properties.fetch(:run_as) || # global property across multiple capistrano gems
+    role.user
+  end
 
   def puma_workers
     fetch(:puma_workers, 0)
